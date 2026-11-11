@@ -1,0 +1,150 @@
+gave simple prompt - I am working as a DevOps engineer in an organization. Now I have the access of GitHub repositories where I can go to the settings and I can see the collaborators that are there for that particular project. Now can you write a shell script in Bash for me, which can take the input as the organization name and the project name and provide me with the list of all the users who have access to that particular GitHub project or repository.
+
+You can automate this using Bash + GitHub CLI (gh). The script will ask for:
+1. GitHub organization name
+2. Repository/project name
+It will then retrieve the users who have collaborator access to that repository, along with their permission level (Admin, Maintain, Write, Triage or Read).
+
+For example, if you enter:
+Organization: microsoft
+Repository: vscode
+
+
+The script will query the GitHub repository and display its collaborators.
+1. Prerequisites
+You need two tools:
+Tool	Purpose
+GitHub CLI (gh)	Communicates with GitHub
+jq	Extracts usernames and permissions from JSON
+
+Install them on Ubuntu:
+sudo apt update
+sudo apt install gh jq -y
+
+
+Then authenticate with GitHub:
+gh auth login
+
+
+Follow the prompts to sign in to your GitHub account.
+
+Permissions required: For a fine-grained personal access token, grant repository Metadata read permission. For a classic personal access token, GitHub documents the repo and read:org scopes. Your authenticated account also needs sufficient repository access to use this API. 
+GitHub Docs
+
+2. Bash script
+Save this script as github_collaborators.sh.
+
+#!/bin/bash
+
+# Check whether required commands are installed
+for cmd in gh jq; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "Error: $cmd is not installed."
+        exit 1
+    fi
+done
+
+# Check GitHub authentication
+if ! gh auth status >/dev/null 2>&1; then
+    echo "Error: You are not authenticated with GitHub."
+    echo "Run: gh auth login"
+    exit 1
+fi
+
+# Get input from user
+read -r -p "Enter GitHub organization name: " ORG
+read -r -p "Enter repository name: " REPO
+
+# Validate input
+if [[ -z "$ORG" || -z "$REPO" ]]; then
+    echo "Error: Organization and repository names are required."
+    exit 1
+fi
+
+echo ""
+echo "Fetching collaborators for $ORG/$REPO..."
+echo "------------------------------------------"
+
+# GitHub API endpoint
+ENDPOINT="repos/$ORG/$REPO/collaborators?affiliation=all&per_page=100"
+
+# Fetch all pages of collaborators
+if ! RESPONSE=$(gh api --paginate --slurp "$ENDPOINT"); then
+    echo "Error: Unable to retrieve repository collaborators."
+    echo "Check repository name, access permissions and authentication."
+    exit 1
+fi
+
+# Count collaborators
+COUNT=$(jq '[.[][]] | length' <<< "$RESPONSE")
+
+if [[ "$COUNT" -eq 0 ]]; then
+    echo "No collaborators found."
+    exit 0
+fi
+
+# Display usernames and access levels
+echo "Repository: $ORG/$REPO"
+echo "Total users: $COUNT"
+echo ""
+
+jq -r '
+    (["USERNAME", "ACCESS LEVEL"]),
+    (.[][] | [.login, (.role_name // "unknown")])
+    | @tsv
+' <<< "$RESPONSE" | column -t -s $'\t'
+
+echo ""
+echo "Completed successfully."
+
+
+
+3. How to execute the script
+First, save the file and give it execution permission:
+chmod +x github_collaborators.sh
+
+
+Execute it:
+./github_collaborators.sh
+
+
+It will ask:
+Enter GitHub organization name: microsoft
+Enter repository name: vscode
+
+
+4. Expected output
+For illustration, the output will look something like this:
+Fetching collaborators for microsoft/vscode...
+------------------------------------------
+
+Repository: microsoft/vscode
+Total users: 4
+
+USERNAME          ACCESS LEVEL
+user1             admin
+user2             write
+user3             read
+user4             maintain
+
+Completed successfully.
+
+
+The usernames above are illustrative, not actual results from Microsoft's repository.
+5. How does this script work?
+These are the important commands to understand.
+Command	What it does
+read -r	Accepts input from the user
+gh auth status	Checks whether GitHub authentication is working
+gh api	Calls the GitHub REST API
+--paginate	Retrieves all pages of results
+--slurp	Collects the pages into one JSON array
+jq	Extracts usernames and access levels
+column	Formats the output into a readable table
+
+The main API endpoint being called is:
+GET https://api.github.com/repos/ORG/REPO/collaborators
+
+
+An important advantage: For organization-owned repositories, this API includes not only individually added collaborators but also organization members who have access through teams, default organization permissions, and organization ownership. It also includes members of child teams. The returned role reflects their highest effective access level. 
+GitHub Docs
